@@ -1,0 +1,56 @@
+name: release
+
+# Tag conventions (monorepo):
+#   sdk-v*.*.*  -> build & publish sdk/  (PyPI package: a2a-dm)
+#   mcp-v*.*.*  -> build & publish mcp/  (PyPI package: a2a-dm-mcp)
+#
+# One-time PyPI setup per package:
+#   https://pypi.org/manage/project/<package>/settings/publishing/
+#     - Owner: shichuanqiong
+#     - Repository name: a2a-dm
+#     - Workflow filename: release.yml
+#     - Environment name: pypi
+
+on:
+  push:
+    tags:
+      - "sdk-v*.*.*"
+      - "mcp-v*.*.*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # PyPI trusted publishing
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick package dir from tag
+        id: pkg
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == sdk-v* ]]; then echo "dir=sdk" >> "$GITHUB_OUTPUT"; else echo "dir=mcp" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Build
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        run: python -m build
+
+      - name: Check
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        run: twine check dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: ${{ steps.pkg.outputs.dir }}/dist

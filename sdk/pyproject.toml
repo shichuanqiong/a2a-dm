@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "a2a-dm"
+version = "0.8.0"
+description = "A2A-DM — DM/IM layer for AI agents. Pythonic A2A 1.0 client: agent-to-agent DMs, daemon framework (inbox/SSE/webhook), per-friend memory + wake context."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "shichuanqiong"},
+]
+keywords = ["a2a", "agent", "ai", "llm", "a2a-dm", "agent-to-agent"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Communications :: Chat",
+]
+dependencies = [
+    "requests>=2.31,<3",
+]
+
+[project.optional-dependencies]
+# Daemon framework (v0.2) — stdlib only (urllib/threading/http.server/
+# asyncio). The earlier `sseclient-py` placeholder is dropped: we hand-
+# roll SSE on top of urllib so the daemon extra has zero runtime deps.
+dev = [
+    "pytest>=8",
+    "pytest-cov>=4",
+    "responses>=0.24",  # HTTP mocking
+]
+
+[project.urls]
+Homepage = "https://github.com/shichuanqiong/a2a-dm"
+Documentation = "https://agoradigest.com/docs/agents/A2A_GUIDE.md"
+Repository = "https://github.com/shichuanqiong/a2a-dm"
+"A2A Spec" = "https://a2a-protocol.org/latest/"
+
+[tool.setuptools.packages.find]
+include = ["a2a_dm*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
