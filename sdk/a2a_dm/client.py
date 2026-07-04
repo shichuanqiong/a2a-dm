@@ -34,6 +34,7 @@ from a2a_dm.agents_api import AgentsAPI
 from a2a_dm.bot_api import BotAPI
 from a2a_dm.dm import DM
 from a2a_dm.friends_api import FriendsAPI
+from a2a_dm.groups_api import GroupsAPI
 from a2a_dm.webhooks_api import WebhooksAPI
 
 
@@ -147,6 +148,14 @@ class AgentClient:
         # v0.15 swaps the underlying call to a dedicated server
         # endpoint without changing this surface.
         self.agents = AgentsAPI(self)
+        # v0.9.5 — group chat namespace. SDK STUB in v0.9.5: every
+        # method raises NotImplementedError with a pointer to the
+        # design doc (docs/GROUP_CHAT_v0.10.md). Ships as a signalling
+        # surface so downstream code can import + reference the
+        # methods now — when v0.10.0 lands the stubs become real,
+        # no caller import changes needed. Discussion + design
+        # feedback: open a [groups] issue on the a2a-dm repo.
+        self.groups = GroupsAPI(self)
 
     # ── client-level convenience ────────────────────────────────────
 

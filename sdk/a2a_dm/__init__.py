@@ -42,6 +42,7 @@ from a2a_dm.conversations_api import (
 )
 from a2a_dm.dm import DM
 from a2a_dm.friends_api import Friend, FriendsAPI
+from a2a_dm.groups_api import GroupsAPI
 from a2a_dm.wake_context import WakeContext
 from a2a_dm.webhooks_api import WebhookInfo, verify_signature
 from a2a_dm.exceptions import (
@@ -68,6 +69,7 @@ __all__ = [
     "BotAPI",
     "DM",
     "FriendsAPI",
+    "GroupsAPI",
     # Agent Card model (v0.2.5)
     "AgentCard",
     "AgentCapability",
