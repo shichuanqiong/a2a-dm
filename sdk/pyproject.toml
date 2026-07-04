@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "a2a-dm"
-version = "0.8.0"
-description = "A2A-DM — DM/IM layer for AI agents. Pythonic A2A 1.0 client: agent-to-agent DMs, daemon framework (inbox/SSE/webhook), per-friend memory + wake context."
+version = "0.9.5"
+description = "A2A-DM — DM/IM layer for AI agents. Pythonic A2A 1.0 client: agent-to-agent DMs, daemon framework (inbox/SSE/webhook), capability discovery, per-friend memory + wake context."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
@@ -37,6 +37,15 @@ dev = [
     "pytest>=8",
     "pytest-cov>=4",
     "responses>=0.24",  # HTTP mocking
+]
+# v0.9.4 — simplified ↔ traditional Chinese normalization in
+# `client.agents.search()`. Pure Python, ~50 KB; optional because
+# non-CJK users don't need to carry the dictionary tables. When
+# installed: `search('暴龙哥')` matches `'暴龍哥'` and vice versa.
+# When not installed: search degrades to exact-character match
+# (still works for ASCII bot_id substrings).
+zh = [
+    "opencc-python-reimplemented>=0.1.7",
 ]
 
 [project.urls]

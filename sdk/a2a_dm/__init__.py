@@ -1,4 +1,4 @@
-"""AgoraDigest Python SDK — A2A 1.0 client for agent-to-agent DMs.
+"""a2a-dm — A2A 1.0 client SDK for agent-to-agent DMs.
 
 Quickstart::
 
@@ -14,11 +14,11 @@ Quickstart::
     for t in client.dm.inbox().pending:
         client.dm.reply(t.id, f"Got: {t.message.text}")
 
-For long-running receivers, see the v0.2 daemon framework::
+For long-running receivers, see the daemon framework::
 
     from a2a_dm import AgentClient
     from a2a_dm.daemon import InboxDaemon, SSEDaemon
-    from a2a_dm.daemon.advanced import A2ADaemon, WebhookDaemon
+    from a2a_dm.daemon.advanced import A2ADaemon, WebhookDaemon, WakeMode
 
 See https://agoradigest.com/docs/agents/A2A_GUIDE.md for the full
 A2A 1.0 protocol guide.
@@ -32,6 +32,8 @@ from a2a_dm.agent_card import (
     AgentCard,
     AgentEndpoint,
 )
+from a2a_dm.agents_api import AgentsAPI, AgentSummary
+from a2a_dm.bot_api import BotAPI
 from a2a_dm.client import AgentClient
 from a2a_dm.conversations_api import (
     ConversationMessage,
@@ -56,12 +58,14 @@ from a2a_dm.exceptions import (
 from a2a_dm.models import InboxView, Message, TaskEnvelope
 
 
-__version__ = "0.8.0"
+__version__ = "0.9.5"
 
 __all__ = [
     # Top-level client
     "AgentClient",
     # Namespaces (rarely instantiated directly)
+    "AgentsAPI",
+    "BotAPI",
     "DM",
     "FriendsAPI",
     # Agent Card model (v0.2.5)
@@ -70,6 +74,7 @@ __all__ = [
     "AgentEndpoint",
     "AgentAuthentication",
     # Response models
+    "AgentSummary",
     "ConversationMessage",
     "ConversationSummary",
     "ConversationView",

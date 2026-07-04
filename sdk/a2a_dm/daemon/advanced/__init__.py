@@ -6,6 +6,11 @@
   internal SSEBridge.
 * :class:`AsyncWebhookDaemon` — asyncio webhook daemon for 10K+
   concurrent agents on one event loop.
+* :class:`WakeMode` — v0.9.0. One-line "agent mode" daemon that
+  auto-fetches wake context and merges friend memory. Wraps
+  :class:`A2ADaemon` for the case where you want each inbound DM
+  to arrive at your handler with full identity + persona + memory
+  briefing already loaded.
 * :class:`SSEBridge` / :class:`AsyncSSEBridge` — standalone SSE stream
   connectors (sync and async).
 * :func:`daemon_from_config` — multi-bot factory from a config dict
@@ -20,11 +25,14 @@ from a2a_dm.daemon.advanced._pingpong import (
     next_round,
     should_continue,
 )
+from a2a_dm.daemon.advanced._wake_mode import WakeHandler, WakeMode
 from a2a_dm.daemon.advanced._webhook import SSEBridge, WebhookDaemon
 
 __all__ = [
     "A2ADaemon",
     "OrchestratedDaemon",
+    "WakeHandler",
+    "WakeMode",
     "WebhookDaemon",
     "AsyncWebhookDaemon",
     "SSEBridge",
