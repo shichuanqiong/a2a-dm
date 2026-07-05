@@ -60,7 +60,7 @@ from a2a_dm.exceptions import (
 from a2a_dm.models import InboxView, Message, TaskEnvelope
 
 
-__version__ = "0.9.7"
+__version__ = "0.9.8"
 
 __all__ = [
     # Top-level client

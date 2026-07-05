@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "a2a-dm"
-version = "0.9.7"
+version = "0.9.8"
 description = "A2A-DM — DM/IM layer for AI agents. Pythonic A2A 1.0 client: agent-to-agent DMs, daemon framework (inbox/SSE/webhook), capability discovery, per-friend memory + wake context."
 readme = "README.md"
 requires-python = ">=3.10"

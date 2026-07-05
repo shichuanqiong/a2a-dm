@@ -1,12 +1,14 @@
 name: a2a-dm
-version: 0.1.1
+version: 0.1.2
 description: >
   Real-time agent-to-agent DMs + group chat over the A2A 1.0 protocol.
-  Ships an SSE-backed inbox listener that fires the pre_llm_call hook
-  with any pending DMs so your agent wakes up on the next turn with
-  full context, plus typed tools to reply, discover peers, and manage
-  groups. v0.1.1 adds proactive Telegram push so the operator sees
-  DMs land even while the agent is idle.
+  v0.1.2: TRUE auto-wake — inbound DMs are injected into the Hermes
+  gateway's webhook adapter and trigger a real agent turn immediately,
+  no human in the loop. Ships a bundled a2a-dm behaviour skill
+  (inbox-first etiquette), an SSE-backed listener with inbox fallback
+  scan, session-start seeding, 12 typed tools, and a 3-tier operator
+  notification ladder that reuses the gateway's own bot (no second
+  Telegram bot needed).
 author: shichuanqiong
 provides_tools:
   - a2a_send_dm
@@ -23,6 +25,9 @@ provides_tools:
   - a2a_leave_group
 provides_hooks:
   - pre_llm_call
+  - session:start
+provides_skills:
+  - a2a-dm
 provides_commands:
   - a2adm
 requires_env:
@@ -33,12 +38,21 @@ requires_env:
   - name: AGORADIGEST_BOT_ID
     description: "Your bot ID (handle) on agoradigest.com"
 
-# Optional. Not gating — plugin still works without these; they enable
-# proactive Telegram push (v0.1.1) so you see DMs while agent is idle.
+# Optional. Not gating — plugin works without these.
 optional_env:
+  - name: A2A_AUTO_WAKE
+    description: "Set to 0 to disable auto-wake turn injection (default: 1)"
+  - name: A2A_WAKE_HOME
+    description: >
+      Where wake responses/notifications land: "telegram" (gateway home
+      channel, default) or "platform:chat_id" e.g. "telegram:-100123".
+  - name: A2A_WAKE_WEBHOOK_URL
+    description: "Override gateway webhook base URL (default http://127.0.0.1:8644)"
+  # Deprecated since v0.1.2 — prefer A2A_WAKE_HOME (reuses the
+  # gateway's own bot; no second BotFather registration needed).
   - name: A2A_WAKE_TG_TOKEN
-    description: "Telegram bot token — proactive DM push (optional, v0.1.1)"
+    description: "DEPRECATED — second-bot Telegram push (v0.1.1 path)"
     url: "https://core.telegram.org/bots/tutorial#obtain-your-bot-token"
     secret: true
   - name: A2A_WAKE_TG_CHAT_ID
-    description: "Telegram chat/group ID for wake notifications"
+    description: "DEPRECATED — Telegram chat ID for second-bot push"

@@ -204,23 +204,23 @@ def test_slash_command_returns_status(monkeypatch):
     out = a2a_dm_hermes._slash_a2adm("")
     assert "a2a-dm v" in out
     assert "wake queue" in out
-    assert "tg proactive" in out  # v0.1.1
+    assert "auto-wake" in out  # v0.1.2
 
 
-# ── v0.1.1 — Telegram proactive push ─────────────────────────────
+# ── v0.1.2 — notification + wake-or-notify paths ─────────────────────────────
 
 
 def test_tg_configured_returns_none_when_unset(monkeypatch):
     monkeypatch.delenv("A2A_WAKE_TG_TOKEN", raising=False)
     monkeypatch.delenv("A2A_WAKE_TG_CHAT_ID", raising=False)
-    from a2a_dm_hermes.runtime import _tg_configured
+    from a2a_dm_hermes.delivery import _tg_configured
     assert _tg_configured() == (None, None)
 
 
 def test_tg_configured_returns_tuple_when_set(monkeypatch):
     monkeypatch.setenv("A2A_WAKE_TG_TOKEN", "abc:xyz")
     monkeypatch.setenv("A2A_WAKE_TG_CHAT_ID", "-100123")
-    from a2a_dm_hermes.runtime import _tg_configured
+    from a2a_dm_hermes.delivery import _tg_configured
     assert _tg_configured() == ("abc:xyz", "-100123")
 
 
@@ -230,13 +230,13 @@ def test_tg_configured_returns_none_when_only_one_set(monkeypatch):
     the push path."""
     monkeypatch.setenv("A2A_WAKE_TG_TOKEN", "abc:xyz")
     monkeypatch.delenv("A2A_WAKE_TG_CHAT_ID", raising=False)
-    from a2a_dm_hermes.runtime import _tg_configured
+    from a2a_dm_hermes.delivery import _tg_configured
     assert _tg_configured() == (None, None)
 
 
-def test_format_tg_notification_direct_message():
-    from a2a_dm_hermes.runtime import _format_tg_notification
-    body = _format_tg_notification({
+def test_format_notification_direct_message():
+    from a2a_dm_hermes.runtime import _format_notification
+    body = _format_notification({
         "sender_bot_id": "laobaigan",
         "task_id":       "abcdef123456-uuid",
         "text":          "hey, alive?",
@@ -245,41 +245,34 @@ def test_format_tg_notification_direct_message():
     assert "@laobaigan" in body
     assert "hey, alive?" in body
     assert "a2a_reply" in body
-    assert "Group" not in body  # 1:1 shouldn't mention group
+    assert "group" not in body.lower().replace("a2a-dm dm", "")
 
 
-def test_format_tg_notification_group_message():
-    from a2a_dm_hermes.runtime import _format_tg_notification
-    body = _format_tg_notification({
+def test_format_notification_group_message():
+    from a2a_dm_hermes.runtime import _format_notification
+    body = _format_notification({
         "sender_bot_id": "bestiedog",
         "task_id":       "task-uuid",
         "text":          "new arxiv paper",
         "group_id":      "group_ext_ml-abc12345",
     })
-    assert "Group message" in body
+    assert "group message" in body.lower()
     assert "@bestiedog" in body
     assert "group_ext_ml-abc12345" in body
     assert "a2a_send_group" in body
 
 
-def test_on_wake_fires_tg_push_when_configured(monkeypatch):
-    """SSE handler should trigger a background TG POST (via
-    ``_tg_send``) when both env vars are set."""
-    monkeypatch.setenv("A2A_WAKE_TG_TOKEN", "abc:xyz")
-    monkeypatch.setenv("A2A_WAKE_TG_CHAT_ID", "-100123")
+def test_on_wake_notifies_when_autowake_unavailable(monkeypatch):
+    """SSE handler must fall through to notify_operator when
+    auto-wake can't run (disabled / no webhook platform)."""
+    import time
 
-    import importlib
     import a2a_dm_hermes.runtime as rt
-    importlib.reload(rt)
 
-    calls: list[tuple] = []
+    calls: list[str] = []
+    monkeypatch.setattr(rt, "notify_operator", lambda text: calls.append(text) or True)
 
-    def fake_send(token, chat_id, text):
-        calls.append((token, chat_id, text))
-
-    monkeypatch.setattr(rt, "_tg_send", fake_send)
-
-    runtime = rt.WakeRuntime.get()
+    runtime = rt.WakeRuntime()  # fresh instance, autowake unset
     runtime.drain()
 
     fake_task = MagicMock()
@@ -292,34 +285,30 @@ def test_on_wake_fires_tg_push_when_configured(monkeypatch):
 
     runtime._on_wake(fake_task, None)
 
-    # Give the daemon thread a beat to fire (best-effort — the thread
-    # is started with daemon=True so it runs promptly).
-    import time
-    for _ in range(20):
+    for _ in range(50):
         if calls:
             break
         time.sleep(0.01)
 
     assert len(calls) == 1
-    token, chat_id, text = calls[0]
-    assert token == "abc:xyz"
-    assert chat_id == "-100123"
-    assert "@laobaigan" in text
+    assert "@laobaigan" in calls[0]
+    assert runtime.pending_count() == 1
 
 
-def test_on_wake_skips_tg_when_unconfigured(monkeypatch):
-    """No TG env → no TG push, but queue still gets the entry."""
-    monkeypatch.delenv("A2A_WAKE_TG_TOKEN", raising=False)
-    monkeypatch.delenv("A2A_WAKE_TG_CHAT_ID", raising=False)
+def test_on_wake_skips_notify_when_autowake_succeeds(monkeypatch):
+    """If the gateway accepted the wake POST, the agent handles the
+    DM in a real turn — an operator ping would be a double notification."""
+    import time
 
-    import importlib
     import a2a_dm_hermes.runtime as rt
-    importlib.reload(rt)
 
-    calls: list = []
-    monkeypatch.setattr(rt, "_tg_send", lambda *a, **k: calls.append(a))
+    notify_calls: list = []
+    monkeypatch.setattr(rt, "notify_operator", lambda t: notify_calls.append(t) or True)
 
-    runtime = rt.WakeRuntime.get()
+    runtime = rt.WakeRuntime()
+    fake_aw = MagicMock()
+    fake_aw.wake.return_value = True
+    runtime._autowake = fake_aw
     runtime.drain()
 
     fake_task = MagicMock()
@@ -332,8 +321,12 @@ def test_on_wake_skips_tg_when_unconfigured(monkeypatch):
 
     runtime._on_wake(fake_task, None)
 
-    import time
-    time.sleep(0.05)  # give any (bug) thread a chance to fire
+    for _ in range(50):
+        if fake_aw.wake.called:
+            break
+        time.sleep(0.01)
+    time.sleep(0.05)
 
-    assert calls == []  # no TG push
-    assert runtime.pending_count() == 1  # but queue was populated
+    assert fake_aw.wake.call_count == 1
+    assert notify_calls == []          # no double notification
+    assert runtime.pending_count() == 1  # queue still gets the entry

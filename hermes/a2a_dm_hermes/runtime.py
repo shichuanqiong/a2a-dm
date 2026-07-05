@@ -1,116 +1,90 @@
-"""Background runtime — SSEDaemon + wake queue.
+"""Background runtime — SSEDaemon + wake queue + auto-wake (v0.1.2).
 
-This is the piece that makes a2a-dm feel *real-time* inside Hermes.
-The plugin starts an :class:`SSEDaemon` at plugin-load time. It
-opens a persistent SSE connection to ``/agents/stream`` and enqueues
-every inbound DM into a thread-safe wake queue. When Hermes fires
-``pre_llm_call`` (once per agent turn), the plugin drains the queue
-and injects the pending DMs as context — so the LLM sees them
-alongside the user's message and knows to respond via the typed
-tools (``a2a_reply`` / ``a2a_send_group``).
+The plugin starts an :class:`SSEDaemon` at plugin-load time. Every
+inbound DM now takes THREE paths, in order of preference:
+
+  1. **Auto-wake** (new in v0.1.2) — POST the DM to the gateway's own
+     webhook adapter, which triggers a *real agent turn* immediately.
+     The agent reads the DM and replies with no human in the loop.
+     See :mod:`a2a_dm_hermes.autowake`.
+  2. **Operator notification** — if auto-wake is disabled or the
+     webhook platform isn't running, tell the human through the
+     3-tier delivery ladder (gateway bot → ``hermes send`` → legacy
+     second bot). See :mod:`a2a_dm_hermes.delivery`.
+  3. **Next-turn injection** (always on, belt-and-suspenders) — the
+     DM is queued and drained into ``pre_llm_call`` context on the
+     next agent turn, whatever triggered it.
+
+v0.1.2 also adds an inbox *fallback scan* (5-second cache) so DMs
+that arrived while the SSE stream was disconnected are still injected
+on the next turn, and a session-start seed for gateway reboots.
 
 Design notes:
 
-* **Leader-lock singleton.** Uses ``fcntl.flock`` on
-  ``~/.hermes/a2a-dm-ws.lock`` so multiple Hermes processes on the
-  same machine don't all open their own SSE — only the leader does,
-  followers stay quiet. Same pattern AgentChat's plugin uses.
-* **Bounded queue.** 200-DM cap; if the LLM turn is slow and the
-  network is fast, older DMs are dropped from the injection buffer
-  (they still show up in ``a2a_get_inbox``, they're not lost). This
-  keeps prompt-token cost bounded.
-* **Best-effort.** SSE outages don't wedge the agent — the plugin
-  logs and continues. The DMs are still safely in the AgoraDigest
-  inbox; the ``a2a_get_inbox`` tool still works.
+* **Leader-lock singleton.** ``fcntl.flock`` on
+  ``~/.hermes/a2a-dm-ws.lock`` so multiple Hermes processes on one
+  machine don't all open their own SSE.
+* **Bounded queue.** 200-DM cap; overflow drops from the injection
+  buffer only — DMs remain in the AgoraDigest inbox.
+* **Best-effort everywhere.** SSE outages, wake failures, and notify
+  failures are logged, never raised.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import threading
-import urllib.error
-import urllib.request
+import time
 from collections import deque
 from pathlib import Path
-from typing import Any, Deque, Optional
+from typing import Deque, Optional
 
 from a2a_dm import AgentClient
 from a2a_dm.daemon import SSEDaemon
+
+from a2a_dm_hermes.autowake import AutoWake
+from a2a_dm_hermes.autowake import enabled as autowake_enabled
+from a2a_dm_hermes.delivery import notify_operator
 
 logger = logging.getLogger(__name__)
 
 
 _WAKE_QUEUE_MAX = 200
-_TG_API_BASE = "https://api.telegram.org"
-_TG_TIMEOUT_S = 5.0
+_SEEN_MAX = 2048
+_INBOX_CACHE_S = 5.0
 
 
-# ── Telegram proactive push (v0.1.1) ──────────────────────────────
-
-
-def _tg_send(token: str, chat_id: str, text: str) -> None:
-    """POST to Telegram bot API. Best-effort — never raises.
-
-    Uses ``urllib`` rather than ``requests`` so the plugin has zero
-    HTTP deps beyond stdlib. Hermes plugins should stay lightweight
-    to keep gateway startup fast.
-    """
-    url = f"{_TG_API_BASE}/bot{token}/sendMessage"
-    payload = json.dumps({
-        "chat_id": chat_id,
-        "text": text[:4000],  # TG max is 4096; leave headroom
-        "disable_web_page_preview": True,
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=_TG_TIMEOUT_S) as resp:
-            resp.read()  # drain — we don't parse
-    except (urllib.error.URLError, TimeoutError) as exc:
-        logger.warning("a2a-dm: TG push failed (%s) — dropping notif", exc)
-    except Exception:  # noqa: BLE001
-        logger.exception("a2a-dm: TG push crashed")
-
-
-def _tg_configured() -> tuple[Optional[str], Optional[str]]:
-    """Return ``(token, chat_id)`` if both are set, ``(None, None)`` if not."""
-    token = os.environ.get("A2A_WAKE_TG_TOKEN")
-    chat_id = os.environ.get("A2A_WAKE_TG_CHAT_ID")
-    if token and chat_id:
-        return token, chat_id
-    return None, None
-
-
-def _format_tg_notification(entry: dict) -> str:
-    """Format a wake entry as a compact TG message.
-
-    Group messages include the group_id + a copy-paste reply hint so
-    the operator knows to invoke ``a2a_send_group`` (not ``a2a_reply``,
-    which would only reach the sender).
-    """
+def _format_notification(entry: dict) -> str:
+    """Compact operator-facing notification for one wake entry."""
     text_preview = (entry.get("text") or "")[:200]
     sender = entry.get("sender_bot_id") or "?"
     task_id = entry.get("task_id") or ""
     if entry.get("group_id"):
         return (
-            f"🔔 Group message\n"
+            f"🔔 a2a-dm group message\n"
             f"From: @{sender}\n"
             f"Group: {entry['group_id']}\n"
             f"Text: {text_preview}\n\n"
-            f"Reply into group: /a2adm  → then send via a2a_send_group\n"
+            f"Reply into group via a2a_send_group\n"
             f"Task: {task_id[:12]}"
         )
     return (
-        f"🔔 DM from @{sender}\n"
+        f"🔔 a2a-dm DM from @{sender}\n"
         f"Text: {text_preview}\n\n"
-        f"Reply: use a2a_reply on task {task_id[:12]}"
+        f"Reply: a2a_reply on task {task_id[:12]}"
     )
+
+
+def _entry_from_task(task) -> dict:
+    return {
+        "task_id":          task.id,
+        "sender_bot_id":    task.sender_bot_id,
+        "text":             (task.message.text if task.message else "")[:2000],
+        "is_group_message": task.is_group_message,
+        "group_id":         task.group_id,
+        "created_at":       task.created_at,
+    }
 
 
 class WakeRuntime:
@@ -124,6 +98,13 @@ class WakeRuntime:
         self._queue_lock = threading.Lock()
         self._daemon: Optional[SSEDaemon] = None
         self._leader_fd = None  # kept alive to hold the flock
+        self._client: Optional[AgentClient] = None
+        self._autowake: Optional[AutoWake] = None
+        # Task ids already queued / drained / auto-woken — stops the
+        # inbox fallback scan from re-injecting handled DMs.
+        self._seen: Deque[str] = deque(maxlen=_SEEN_MAX)
+        self._seen_set: set[str] = set()
+        self._last_inbox_scan: float = 0.0
 
     # ── Singleton accessor ────────────────────────────────────────
 
@@ -137,19 +118,11 @@ class WakeRuntime:
     # ── Leader-lock so N Hermes processes don't all open SSE ──────
 
     def _acquire_leader(self) -> bool:
-        """Return True if this process becomes the SSE leader.
-
-        Uses fcntl.flock on ``~/.hermes/a2a-dm-ws.lock``. If another
-        process already holds the lock we quietly become a follower —
-        the plugin's tools still work through HTTP, we just don't
-        open a duplicate SSE stream.
-        """
+        """Return True if this process becomes the SSE leader."""
         try:
             import fcntl  # POSIX only
         except ImportError:
-            # Windows — no flock. Just always run; users rarely have
-            # multiple Hermes processes on Windows anyway.
-            return True
+            return True  # Windows — no flock; single-process assumption
 
         hermes_home = Path(
             os.environ.get("HERMES_HOME") or Path.home() / ".hermes"
@@ -173,8 +146,7 @@ class WakeRuntime:
     # ── Public lifecycle ──────────────────────────────────────────
 
     def start(self) -> None:
-        """Bring up the SSE daemon. No-op if we're a follower or if
-        env credentials are missing."""
+        """Bring up the SSE daemon. No-op if follower / missing env."""
         if self._daemon is not None:
             return  # already started
 
@@ -191,20 +163,24 @@ class WakeRuntime:
         if not self._acquire_leader():
             return
 
-        client = AgentClient(token=token, bot_id=bot_id)
+        self._client = AgentClient(token=token, bot_id=bot_id)
+        self._autowake = AutoWake(bot_id)
+        if autowake_enabled():
+            # Register webhook routes eagerly so the first DM doesn't
+            # pay the setup cost. Failure just logs + falls back.
+            self._autowake.ensure_ready()
+
         self._daemon = SSEDaemon(
-            client,
+            self._client,
             bot_id=bot_id,
             handler=self._on_wake,
             fallback_interval_s=30.0,
-            auto_ack=False,  # let the agent's a2a_reply / a2a_send_group
-                             # decide when to ack; auto-ack would race
-                             # with the next agent turn.
+            auto_ack=False,  # the agent's reply tools decide when to ack
         )
         self._daemon.start()
         logger.info(
-            "a2a-dm: SSE wake runtime up (bot=%s, leader=%s)",
-            bot_id, self._leader_fd is not None,
+            "a2a-dm: SSE wake runtime up (bot=%s, leader=%s, auto_wake=%s)",
+            bot_id, self._leader_fd is not None, autowake_enabled(),
         )
 
     def stop(self) -> None:
@@ -221,52 +197,93 @@ class WakeRuntime:
                 pass
             self._leader_fd = None
 
-    # ── SSE callback: enqueue for pre_llm_call injection ──────────
+    # ── Seen-set helpers ──────────────────────────────────────────
+
+    def _mark_seen(self, task_id: str) -> None:
+        if not task_id or task_id in self._seen_set:
+            return
+        if len(self._seen) == self._seen.maxlen:
+            oldest = self._seen[0]
+            self._seen_set.discard(oldest)
+        self._seen.append(task_id)
+        self._seen_set.add(task_id)
+
+    # ── SSE callback ──────────────────────────────────────────────
 
     def _on_wake(self, task, daemon) -> None:  # noqa: ARG002
-        """SSEDaemon handler — fired on every inbound DM.
+        """Fired on every inbound DM (SSE or polling fallback).
 
-        We do NOT auto-reply here. The point is to wake the *agent*,
-        not to answer on its behalf. The queue drains on the next
-        ``pre_llm_call`` turn.
-
-        v0.1.1 — additionally push a compact notification to Telegram
-        when ``A2A_WAKE_TG_TOKEN`` + ``A2A_WAKE_TG_CHAT_ID`` are set.
-        This gives the operator visibility while the agent is idle,
-        so they know a DM landed without having to poll Hermes.
+        Queue for next-turn injection, then in a background thread try
+        auto-wake (real turn now); if that can't run, notify the
+        operator through the delivery ladder.
         """
-        entry = {
-            "task_id":          task.id,
-            "sender_bot_id":    task.sender_bot_id,
-            "text":             (task.message.text if task.message else "")[:2000],
-            "is_group_message": task.is_group_message,
-            "group_id":         task.group_id,
-            "created_at":       task.created_at,
-        }
+        entry = _entry_from_task(task)
         with self._queue_lock:
             self._queue.append(entry)
+            self._mark_seen(entry["task_id"])
         logger.debug(
             "a2a-dm: enqueued wake from %s (task=%s, group=%s)",
-            task.sender_bot_id, task.id[:12], task.group_id or "-",
+            entry["sender_bot_id"], entry["task_id"][:12],
+            entry["group_id"] or "-",
         )
 
-        # Fire-and-forget TG push. Runs in a daemon thread so a slow
-        # TG API call never blocks the SSE dispatch loop.
-        token, chat_id = _tg_configured()
-        if token and chat_id:
-            body = _format_tg_notification(entry)
-            threading.Thread(
-                target=_tg_send,
-                args=(token, chat_id, body),
-                daemon=True,
-                name="a2a-dm-tg-notify",
-            ).start()
+        # Network I/O off the SSE dispatch thread.
+        threading.Thread(
+            target=self._wake_or_notify,
+            args=(entry,),
+            daemon=True,
+            name="a2a-dm-wake",
+        ).start()
+
+    def _wake_or_notify(self, entry: dict) -> None:
+        try:
+            if self._autowake is not None and self._autowake.wake(entry):
+                # A real agent turn is running; its response is
+                # delivered to the home channel by the gateway — an
+                # extra ping here would be a double notification.
+                return
+            notify_operator(_format_notification(entry))
+        except Exception:  # noqa: BLE001
+            logger.exception("a2a-dm: wake-or-notify crashed")
+
+    # ── Inbox fallback scan (v0.1.2) ──────────────────────────────
+
+    def seed_from_inbox(self, *, force: bool = False, limit: int = 20) -> int:
+        """Queue pending inbox tasks that we haven't seen yet.
+
+        Called from the ``session:start`` hook (force=True) and from
+        every ``pre_llm_call`` (5-second cache) as insurance against
+        SSE gaps. Returns the number of newly queued entries.
+        """
+        if self._client is None:
+            return 0
+        now = time.monotonic()
+        if not force and (now - self._last_inbox_scan) < _INBOX_CACHE_S:
+            return 0
+        self._last_inbox_scan = now
+        try:
+            view = self._client.dm.inbox(state="submitted", limit=limit)
+        except Exception:  # noqa: BLE001
+            logger.debug("a2a-dm: inbox fallback scan failed", exc_info=True)
+            return 0
+        added = 0
+        with self._queue_lock:
+            for task in view.tasks:
+                if task.id in self._seen_set:
+                    continue
+                self._queue.append(_entry_from_task(task))
+                self._mark_seen(task.id)
+                added += 1
+        if added:
+            logger.info(
+                "a2a-dm: inbox fallback scan queued %d missed DM(s)", added
+            )
+        return added
 
     # ── pre_llm_call drain ────────────────────────────────────────
 
     def drain(self) -> list[dict]:
-        """Return + clear all pending wake entries. Called on every
-        agent turn."""
+        """Return + clear all pending wake entries."""
         with self._queue_lock:
             drained = list(self._queue)
             self._queue.clear()
