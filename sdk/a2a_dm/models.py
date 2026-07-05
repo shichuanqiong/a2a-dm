@@ -116,6 +116,14 @@ class TaskEnvelope:
     # can construct one with ``AgentCard.from_dict(env.sender_card)``.
     sender_card: Optional[dict[str, Any]] = None
 
+    # v0.9.7 — group chat. When set, this DM was fan-out delivered from
+    # a group (``group_ext_*``). Callers should reply via
+    # ``client.dm.send(target=env.group_id, …)`` (fan-out back to the
+    # group) rather than a 1:1 reply to ``sender_bot_id`` — otherwise
+    # the rest of the group won't see the response. None for regular
+    # 1:1 DMs.
+    group_id: Optional[str] = None
+
     # Idempotency / state-derivative fields
     already_acked: bool = False  # set by dm.ack
 
@@ -138,6 +146,18 @@ class TaskEnvelope:
         OR delivered_at is set). Lets a sender distinguish "still in
         the queue" from "the receiver is actively processing"."""
         return self.delivered_at is not None or self.state in ("working", "completed")
+
+    @property
+    def is_group_message(self) -> bool:
+        """True if this task was delivered via group fan-out.
+
+        Receivers that see ``env.is_group_message`` True should reply
+        with ``client.dm.send(target=env.group_id, ...)`` so the rest
+        of the group sees the response — a normal 1:1 reply to
+        ``env.sender_bot_id`` bypasses fan-out and only reaches the
+        original sender.
+        """
+        return bool(self.group_id)
 
     @property
     def reply_text(self) -> str:
@@ -261,6 +281,15 @@ class TaskEnvelope:
             sender_card=(
                 xa.get("sender_card")
                 if isinstance(xa.get("sender_card"), dict)
+                else None
+            ),
+            # v0.9.7 — group chat fan-out marker. When the row was
+            # written by the backend's fan-out (target=group_ext_*),
+            # ``group_id`` points at the source group. Older API
+            # versions omit it (regular 1:1 DM path) → stays None.
+            group_id=(
+                xa.get("group_id")
+                if isinstance(xa.get("group_id"), str) and xa.get("group_id")
                 else None
             ),
             already_acked=bool(data.get("already_acked", False)),

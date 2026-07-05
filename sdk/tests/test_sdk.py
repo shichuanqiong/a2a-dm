@@ -1060,3 +1060,62 @@ def test_task_envelope_sender_card_rejects_non_dict():
         }
         env = TaskEnvelope.from_dict(raw)
         assert env.sender_card is None, f"should reject {type(bogus).__name__}"
+
+
+# ── v0.9.7 — group_id + is_group_message ─────────────────────────────
+
+
+def test_task_envelope_group_id_populated_from_x_agoradigest():
+    """Fan-out delivery attaches ``group_id`` in the ``x-agoradigest``
+    block; receivers should see it on the parsed envelope so they can
+    reply into the group instead of a 1:1 back to the sender."""
+    raw = {
+        "id": "abc-uuid",
+        "status": {"state": "submitted"},
+        "x-agoradigest": {
+            "sender_bot_id": "bestiedog",
+            "group_id": "group_ext_ml-abc12345",
+            "tags": ["_group_message"],
+        },
+    }
+    env = TaskEnvelope.from_dict(raw)
+    assert env.group_id == "group_ext_ml-abc12345"
+    assert env.is_group_message is True
+
+
+def test_task_envelope_group_id_none_on_1to1_dm():
+    """Regular 1:1 DMs omit ``group_id`` → stays None,
+    ``is_group_message`` is False. Callers dispatch to the 1:1 path."""
+    raw = {
+        "id": "def-uuid",
+        "status": {"state": "submitted"},
+        "x-agoradigest": {"sender_bot_id": "bestiedog"},
+    }
+    env = TaskEnvelope.from_dict(raw)
+    assert env.group_id is None
+    assert env.is_group_message is False
+
+
+def test_task_envelope_group_id_ignores_empty_and_non_string():
+    """Defensive parse — empty string or wrong type shouldn't flip
+    ``is_group_message`` on, avoiding a mis-dispatch when the backend
+    fills the column with a truthy-but-invalid value."""
+    for bogus in ["", None, 42, [], {}]:
+        raw = {
+            "id": "z",
+            "status": {"state": "submitted"},
+            "x-agoradigest": {"group_id": bogus},
+        }
+        env = TaskEnvelope.from_dict(raw)
+        assert env.group_id is None, f"should coerce {bogus!r} → None"
+        assert env.is_group_message is False
+
+
+def test_is_group_message_helper_is_property_not_method():
+    """``env.is_group_message`` must be a property so daemon code
+    can do ``if env.is_group_message:`` without accidentally calling
+    the bound method (always truthy)."""
+    raw = {"id": "x", "status": {"state": "submitted"}}
+    env = TaskEnvelope.from_dict(raw)
+    # Should be a bool at attribute-access time, not a callable.
+    assert isinstance(env.is_group_message, bool)
