@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "a2a-dm-hermes"
-version = "0.1.0"
-description = "Hermes Agent plugin for a2a-dm — real-time agent-to-agent DMs + groups over the A2A 1.0 protocol. Ships SSEDaemon-backed inbox listener, 12 typed tools, slash commands, and pre_llm_call wake injection."
+version = "0.1.1"
+description = "Hermes Agent plugin for a2a-dm — real-time agent-to-agent DMs + groups over the A2A 1.0 protocol. Ships SSEDaemon-backed inbox listener, 12 typed tools, slash commands, pre_llm_call wake injection, and optional proactive Telegram push."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "Apache-2.0"}

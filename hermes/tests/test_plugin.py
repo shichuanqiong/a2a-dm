@@ -204,3 +204,136 @@ def test_slash_command_returns_status(monkeypatch):
     out = a2a_dm_hermes._slash_a2adm("")
     assert "a2a-dm v" in out
     assert "wake queue" in out
+    assert "tg proactive" in out  # v0.1.1
+
+
+# ── v0.1.1 — Telegram proactive push ─────────────────────────────
+
+
+def test_tg_configured_returns_none_when_unset(monkeypatch):
+    monkeypatch.delenv("A2A_WAKE_TG_TOKEN", raising=False)
+    monkeypatch.delenv("A2A_WAKE_TG_CHAT_ID", raising=False)
+    from a2a_dm_hermes.runtime import _tg_configured
+    assert _tg_configured() == (None, None)
+
+
+def test_tg_configured_returns_tuple_when_set(monkeypatch):
+    monkeypatch.setenv("A2A_WAKE_TG_TOKEN", "abc:xyz")
+    monkeypatch.setenv("A2A_WAKE_TG_CHAT_ID", "-100123")
+    from a2a_dm_hermes.runtime import _tg_configured
+    assert _tg_configured() == ("abc:xyz", "-100123")
+
+
+def test_tg_configured_returns_none_when_only_one_set(monkeypatch):
+    """Partial config = not configured. Both env vars are required
+    together — a stray token without a chat id shouldn't half-enable
+    the push path."""
+    monkeypatch.setenv("A2A_WAKE_TG_TOKEN", "abc:xyz")
+    monkeypatch.delenv("A2A_WAKE_TG_CHAT_ID", raising=False)
+    from a2a_dm_hermes.runtime import _tg_configured
+    assert _tg_configured() == (None, None)
+
+
+def test_format_tg_notification_direct_message():
+    from a2a_dm_hermes.runtime import _format_tg_notification
+    body = _format_tg_notification({
+        "sender_bot_id": "laobaigan",
+        "task_id":       "abcdef123456-uuid",
+        "text":          "hey, alive?",
+        "group_id":      None,
+    })
+    assert "@laobaigan" in body
+    assert "hey, alive?" in body
+    assert "a2a_reply" in body
+    assert "Group" not in body  # 1:1 shouldn't mention group
+
+
+def test_format_tg_notification_group_message():
+    from a2a_dm_hermes.runtime import _format_tg_notification
+    body = _format_tg_notification({
+        "sender_bot_id": "bestiedog",
+        "task_id":       "task-uuid",
+        "text":          "new arxiv paper",
+        "group_id":      "group_ext_ml-abc12345",
+    })
+    assert "Group message" in body
+    assert "@bestiedog" in body
+    assert "group_ext_ml-abc12345" in body
+    assert "a2a_send_group" in body
+
+
+def test_on_wake_fires_tg_push_when_configured(monkeypatch):
+    """SSE handler should trigger a background TG POST (via
+    ``_tg_send``) when both env vars are set."""
+    monkeypatch.setenv("A2A_WAKE_TG_TOKEN", "abc:xyz")
+    monkeypatch.setenv("A2A_WAKE_TG_CHAT_ID", "-100123")
+
+    import importlib
+    import a2a_dm_hermes.runtime as rt
+    importlib.reload(rt)
+
+    calls: list[tuple] = []
+
+    def fake_send(token, chat_id, text):
+        calls.append((token, chat_id, text))
+
+    monkeypatch.setattr(rt, "_tg_send", fake_send)
+
+    runtime = rt.WakeRuntime.get()
+    runtime.drain()
+
+    fake_task = MagicMock()
+    fake_task.id = "abcdef123456"
+    fake_task.sender_bot_id = "laobaigan"
+    fake_task.message.text = "yo"
+    fake_task.is_group_message = False
+    fake_task.group_id = None
+    fake_task.created_at = "2026-07-04T09:00:00+00:00"
+
+    runtime._on_wake(fake_task, None)
+
+    # Give the daemon thread a beat to fire (best-effort — the thread
+    # is started with daemon=True so it runs promptly).
+    import time
+    for _ in range(20):
+        if calls:
+            break
+        time.sleep(0.01)
+
+    assert len(calls) == 1
+    token, chat_id, text = calls[0]
+    assert token == "abc:xyz"
+    assert chat_id == "-100123"
+    assert "@laobaigan" in text
+
+
+def test_on_wake_skips_tg_when_unconfigured(monkeypatch):
+    """No TG env → no TG push, but queue still gets the entry."""
+    monkeypatch.delenv("A2A_WAKE_TG_TOKEN", raising=False)
+    monkeypatch.delenv("A2A_WAKE_TG_CHAT_ID", raising=False)
+
+    import importlib
+    import a2a_dm_hermes.runtime as rt
+    importlib.reload(rt)
+
+    calls: list = []
+    monkeypatch.setattr(rt, "_tg_send", lambda *a, **k: calls.append(a))
+
+    runtime = rt.WakeRuntime.get()
+    runtime.drain()
+
+    fake_task = MagicMock()
+    fake_task.id = "abc"
+    fake_task.sender_bot_id = "peer"
+    fake_task.message.text = "hi"
+    fake_task.is_group_message = False
+    fake_task.group_id = None
+    fake_task.created_at = None
+
+    runtime._on_wake(fake_task, None)
+
+    import time
+    time.sleep(0.05)  # give any (bug) thread a chance to fire
+
+    assert calls == []  # no TG push
+    assert runtime.pending_count() == 1  # but queue was populated

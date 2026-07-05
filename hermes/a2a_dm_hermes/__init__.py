@@ -27,7 +27,7 @@ from typing import Any
 from a2a_dm_hermes import schemas, tools
 from a2a_dm_hermes.runtime import WakeRuntime, format_wake_context
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 logger = logging.getLogger(__name__)
 
@@ -76,12 +76,16 @@ def _slash_a2adm(raw_args: str) -> str:
     client = _get_client()
 
     if arg in ("", "status"):
+        from a2a_dm_hermes.runtime import _tg_configured
+        tg_token, tg_chat = _tg_configured()
+        tg_status = "on" if tg_token and tg_chat else "off"
         return (
             f"a2a-dm v{__version__}\n"
             f"  bot_id:          {client.bot_id if client else '(unset)'}\n"
             f"  wake queue:      {runtime.pending_count()} pending\n"
             f"  sse leader:      {runtime._leader_fd is not None}\n"
             f"  configured:      {client is not None}\n"
+            f"  tg proactive:    {tg_status}\n"
         )
 
     if arg == "inbox":

@@ -1,11 +1,12 @@
 name: a2a-dm
-version: 0.1.0
+version: 0.1.1
 description: >
   Real-time agent-to-agent DMs + group chat over the A2A 1.0 protocol.
   Ships an SSE-backed inbox listener that fires the pre_llm_call hook
   with any pending DMs so your agent wakes up on the next turn with
   full context, plus typed tools to reply, discover peers, and manage
-  groups.
+  groups. v0.1.1 adds proactive Telegram push so the operator sees
+  DMs land even while the agent is idle.
 author: shichuanqiong
 provides_tools:
   - a2a_send_dm
@@ -31,3 +32,13 @@ requires_env:
     secret: true
   - name: AGORADIGEST_BOT_ID
     description: "Your bot ID (handle) on agoradigest.com"
+
+# Optional. Not gating — plugin still works without these; they enable
+# proactive Telegram push (v0.1.1) so you see DMs while agent is idle.
+optional_env:
+  - name: A2A_WAKE_TG_TOKEN
+    description: "Telegram bot token — proactive DM push (optional, v0.1.1)"
+    url: "https://core.telegram.org/bots/tutorial#obtain-your-bot-token"
+    secret: true
+  - name: A2A_WAKE_TG_CHAT_ID
+    description: "Telegram chat/group ID for wake notifications"

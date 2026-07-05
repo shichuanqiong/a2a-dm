@@ -26,9 +26,12 @@ Design notes:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
+import urllib.error
+import urllib.request
 from collections import deque
 from pathlib import Path
 from typing import Any, Deque, Optional
@@ -40,6 +43,74 @@ logger = logging.getLogger(__name__)
 
 
 _WAKE_QUEUE_MAX = 200
+_TG_API_BASE = "https://api.telegram.org"
+_TG_TIMEOUT_S = 5.0
+
+
+# ── Telegram proactive push (v0.1.1) ──────────────────────────────
+
+
+def _tg_send(token: str, chat_id: str, text: str) -> None:
+    """POST to Telegram bot API. Best-effort — never raises.
+
+    Uses ``urllib`` rather than ``requests`` so the plugin has zero
+    HTTP deps beyond stdlib. Hermes plugins should stay lightweight
+    to keep gateway startup fast.
+    """
+    url = f"{_TG_API_BASE}/bot{token}/sendMessage"
+    payload = json.dumps({
+        "chat_id": chat_id,
+        "text": text[:4000],  # TG max is 4096; leave headroom
+        "disable_web_page_preview": True,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_TG_TIMEOUT_S) as resp:
+            resp.read()  # drain — we don't parse
+    except (urllib.error.URLError, TimeoutError) as exc:
+        logger.warning("a2a-dm: TG push failed (%s) — dropping notif", exc)
+    except Exception:  # noqa: BLE001
+        logger.exception("a2a-dm: TG push crashed")
+
+
+def _tg_configured() -> tuple[Optional[str], Optional[str]]:
+    """Return ``(token, chat_id)`` if both are set, ``(None, None)`` if not."""
+    token = os.environ.get("A2A_WAKE_TG_TOKEN")
+    chat_id = os.environ.get("A2A_WAKE_TG_CHAT_ID")
+    if token and chat_id:
+        return token, chat_id
+    return None, None
+
+
+def _format_tg_notification(entry: dict) -> str:
+    """Format a wake entry as a compact TG message.
+
+    Group messages include the group_id + a copy-paste reply hint so
+    the operator knows to invoke ``a2a_send_group`` (not ``a2a_reply``,
+    which would only reach the sender).
+    """
+    text_preview = (entry.get("text") or "")[:200]
+    sender = entry.get("sender_bot_id") or "?"
+    task_id = entry.get("task_id") or ""
+    if entry.get("group_id"):
+        return (
+            f"🔔 Group message\n"
+            f"From: @{sender}\n"
+            f"Group: {entry['group_id']}\n"
+            f"Text: {text_preview}\n\n"
+            f"Reply into group: /a2adm  → then send via a2a_send_group\n"
+            f"Task: {task_id[:12]}"
+        )
+    return (
+        f"🔔 DM from @{sender}\n"
+        f"Text: {text_preview}\n\n"
+        f"Reply: use a2a_reply on task {task_id[:12]}"
+    )
 
 
 class WakeRuntime:
@@ -158,6 +229,11 @@ class WakeRuntime:
         We do NOT auto-reply here. The point is to wake the *agent*,
         not to answer on its behalf. The queue drains on the next
         ``pre_llm_call`` turn.
+
+        v0.1.1 — additionally push a compact notification to Telegram
+        when ``A2A_WAKE_TG_TOKEN`` + ``A2A_WAKE_TG_CHAT_ID`` are set.
+        This gives the operator visibility while the agent is idle,
+        so they know a DM landed without having to poll Hermes.
         """
         entry = {
             "task_id":          task.id,
@@ -173,6 +249,18 @@ class WakeRuntime:
             "a2a-dm: enqueued wake from %s (task=%s, group=%s)",
             task.sender_bot_id, task.id[:12], task.group_id or "-",
         )
+
+        # Fire-and-forget TG push. Runs in a daemon thread so a slow
+        # TG API call never blocks the SSE dispatch loop.
+        token, chat_id = _tg_configured()
+        if token and chat_id:
+            body = _format_tg_notification(entry)
+            threading.Thread(
+                target=_tg_send,
+                args=(token, chat_id, body),
+                daemon=True,
+                name="a2a-dm-tg-notify",
+            ).start()
 
     # ── pre_llm_call drain ────────────────────────────────────────
 
