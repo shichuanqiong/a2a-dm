@@ -1,62 +1,53 @@
-"""``client.groups`` namespace — SDK stub for v0.10 group chat.
+"""``client.groups`` namespace — group chat SDK (v0.9.6 Phase 1).
 
-**Status:** STUB. Every method here raises :class:`NotImplementedError`.
-Ships in v0.9.5 as a signalling API so downstream code can wire imports
-(``client.groups.list()``) knowing the shape won't change when v0.10
-lands.
+Phase 1 (this file — v0.9.6):
+  * create, list, get, invite, accept, decline, leave, delete
+    — REAL implementations wired to ``/a2a/v1/groups`` + ``/a2a/v1/invites``.
+  * add_member, remove_member, promote, demote, get_memory,
+    update_memory, mute, unmute, search, get_membership — still stub
+    (raise NotImplementedError with a v0.10.1 pointer).
 
-The full design is in ``docs/GROUP_CHAT_v0.10.md``. TL;DR:
+Full design: ``docs/GROUP_CHAT_v0.10.md``. TL;DR:
 
-* Groups are first-class agents (``group_ext_*``); ``client.dm.send(target=group_id, …)``
-  transparently fans out to members.
-* Consent-required joins (invite → accept/decline); new members only see
-  history from their join time.
-* Roles: admin (add/remove members) vs member (send/read).
+* Groups are first-class agents (``group_ext_*`` namespace).
+  ``client.dm.send(target=group_id, …)`` transparently fans out.
+* Consent-required joins (invite → accept, no silent add).
+* History from join time.
+* Roles: creator (permanent admin), admins (Phase 2 promotable),
+  members (send + read).
 * 256 member cap.
-* Idempotent + per-group sequence + gap recovery, same as DMs.
-* Wake context extends: ``ctx.is_group``, ``ctx.group_memory``,
-  ``ctx.group_recent_turns``, ``ctx.other_members``, ``ctx.your_role``.
 
-**Roadmap:**
-
-* v0.9.5 (this file): stubs
-* v0.9.6: response models (``Group``, ``GroupMembership``, ``GroupInvite``)
-* v0.10.0: backend endpoints + full impl
-* v0.10.1: group memory + wake context integration
-
-Discussion: open an issue with the ``[groups]`` tag on
-https://github.com/shichuanqiong/a2a-dm/issues
+Roadmap:
+  * v0.9.6 (this): Phase 1 methods real
+  * v0.10.0: memory + wake context integration
+  * v0.10.1: admin ops (promote / demote / add_member / remove_member)
+  * v0.11: mute, public group search, round-robin / selector policies
 """
 
 from __future__ import annotations
 
 from typing import Any, List, Optional, Sequence
 
+from a2a_dm.groups_models import Group, GroupInvite, GroupMembership
 
-_PLANNED_V010 = (
-    "client.groups is a stub in v0.9.5 — full implementation ships in "
-    "v0.10.0. See docs/GROUP_CHAT_v0.10.md for the design, or open a "
-    "[groups] issue at https://github.com/shichuanqiong/a2a-dm/issues "
-    "to shape the shipped API."
+
+_PLANNED_V010_1 = (
+    "This method ships in v0.10.1 (admin ops, memory, mute). See "
+    "docs/GROUP_CHAT_v0.10.md for the design. Open a [groups] issue "
+    "at https://github.com/shichuanqiong/a2a-dm/issues if you have a "
+    "concrete use case."
 )
 
 
 class GroupsAPI:
     """Namespace for group chat operations.
 
-    Attached to :class:`AgentClient` as ``client.groups``. Every method
-    raises :class:`NotImplementedError` in v0.9.5 with a helpful pointer
-    to the design doc + issue tracker.
-
-    Rationale for shipping stubs early: downstream code (chat UIs,
-    coordinator agents) can import and reference these methods now.
-    When v0.10 lands, callers upgrade the package version and the
-    ``NotImplementedError``s become real returns — no import path change.
+    Attached to :class:`AgentClient` as ``client.groups``. Reads
+    ``client._http`` at call time so token swaps + base URL overrides
+    work post-construction.
     """
 
     def __init__(self, client: "Any") -> None:
-        # Type-hint as Any to avoid the import cycle with
-        # ``a2a_dm.client``.
         self._client = client
 
     # ── Creation ────────────────────────────────────────────────────
@@ -69,7 +60,7 @@ class GroupsAPI:
         initial_members: Optional[Sequence[str]] = None,
         policy: str = "broadcast",
         visibility: str = "private",
-    ) -> Any:
+    ) -> Group:
         """Create a new group.
 
         Args:
@@ -78,168 +69,144 @@ class GroupsAPI:
           initial_members: Bot ids to send invites to on creation.
             Note: invites, not silent adds — invitees still consent.
           policy: One of ``"broadcast"``, ``"round_robin"``, ``"selector"``.
-            v0.10 ships broadcast first; others are v0.10.1+.
-          visibility: ``"private"`` (invite-only) or ``"public"``
-            (discoverable via ``search()``).
+            v0.10 ships broadcast first; others are v0.11+.
+          visibility: ``"private"`` (invite-only) or ``"public"``.
 
         Returns:
-          v0.10: :class:`Group` — the freshly created group with a
-          ``group_ext_*`` id you can immediately DM.
+          The freshly created :class:`Group`.
         """
-        raise NotImplementedError(_PLANNED_V010)
+        body: dict = {"name": name, "policy": policy, "visibility": visibility}
+        if description is not None:
+            body["description"] = description
+        if initial_members:
+            body["initial_members"] = [str(m) for m in initial_members]
+        resp = self._client._http.request(
+            "POST", "/a2a/v1/groups", json_body=body,
+        )
+        return Group.from_dict(resp if isinstance(resp, dict) else {})
 
     # ── Invite / consent ────────────────────────────────────────────
 
-    def invite(self, group_id: str, bot_id: str) -> Any:
-        """Send a group invite to ``bot_id``.
+    def invite(self, group_id: str, bot_id: str) -> GroupInvite:
+        """Send a group invite to ``bot_id``. Admin-only.
 
         The invitee's inbox will receive a ``group.invite`` task the
         next time they poll or the SSE stream fires. They accept/decline
         via :meth:`accept` / :meth:`decline`.
-
-        Only admins can invite.
         """
-        raise NotImplementedError(_PLANNED_V010)
+        resp = self._client._http.request(
+            "POST",
+            f"/a2a/v1/groups/{group_id}/invite",
+            json_body={"bot_id": bot_id},
+        )
+        return GroupInvite.from_dict(resp if isinstance(resp, dict) else {})
 
-    def accept(self, task_id: str) -> Any:
-        """Accept a ``group.invite`` task from your inbox.
+    def accept(self, invite_id: str) -> GroupMembership:
+        """Accept a group invite.
 
         Adds you as a member with ``joined_at = now``. You start seeing
         group messages sent AFTER this moment (history from join time).
         """
-        raise NotImplementedError(_PLANNED_V010)
+        resp = self._client._http.request(
+            "POST", f"/a2a/v1/invites/{invite_id}/accept",
+        )
+        return GroupMembership.from_dict(resp if isinstance(resp, dict) else {})
 
-    def decline(self, task_id: str) -> Any:
-        """Decline a ``group.invite`` task from your inbox.
+    def decline(self, invite_id: str) -> GroupInvite:
+        """Decline a group invite.
 
         Non-destructive: the invite is marked declined; the inviter is
         NOT notified (avoiding leaking your online status to admins).
         """
-        raise NotImplementedError(_PLANNED_V010)
+        resp = self._client._http.request(
+            "POST", f"/a2a/v1/invites/{invite_id}/decline",
+        )
+        return GroupInvite.from_dict(resp if isinstance(resp, dict) else {})
 
     # ── Discovery ───────────────────────────────────────────────────
 
-    def list(self, *, limit: int = 50) -> List[Any]:
-        """List groups you are a member of.
+    def list(self, *, limit: int = 50) -> List[Group]:
+        """List groups you are a member of."""
+        resp = self._client._http.request(
+            "GET", f"/a2a/v1/groups?limit={int(limit)}",
+        )
+        if not isinstance(resp, dict):
+            return []
+        return [
+            Group.from_dict(g) for g in (resp.get("groups") or [])
+            if isinstance(g, dict)
+        ]
 
-        Returns:
-          v0.10: ``list[Group]`` sorted by most-recent-message-first.
-        """
-        raise NotImplementedError(_PLANNED_V010)
+    def get(self, group_id: str) -> Group:
+        """Fetch full metadata for a specific group."""
+        resp = self._client._http.request(
+            "GET", f"/a2a/v1/groups/{group_id}",
+        )
+        return Group.from_dict(resp if isinstance(resp, dict) else {})
 
-    def get(self, group_id: str) -> Any:
-        """Fetch full metadata for a specific group.
-
-        Returns:
-          v0.10: :class:`Group` — name, description, members, policy,
-          your role, memory blob (if you're a member).
-        """
-        raise NotImplementedError(_PLANNED_V010)
-
-    def get_membership(self, group_id: str) -> Any:
+    def get_membership(self, group_id: str) -> GroupMembership:
         """Fetch your own membership record for a group.
 
-        Returns:
-          v0.10: :class:`GroupMembership` — your role, joined_at,
-          invited_by, muted state.
+        v0.10.1 (not yet implemented server-side).
         """
-        raise NotImplementedError(_PLANNED_V010)
+        raise NotImplementedError(_PLANNED_V010_1)
 
     def search(
         self, *, name: Optional[str] = None, limit: int = 20
-    ) -> List[Any]:
-        """Search public groups. Private groups are not indexed here.
+    ) -> List[Group]:
+        """Search public groups (v0.11)."""
+        raise NotImplementedError(_PLANNED_V010_1)
 
-        Returns:
-          v0.10: ``list[Group]`` matching the query.
-        """
-        raise NotImplementedError(_PLANNED_V010)
-
-    # ── Admin operations ────────────────────────────────────────────
+    # ── Admin operations (v0.10.1) ──────────────────────────────────
 
     def add_member(self, group_id: str, bot_id: str) -> Any:
-        """Admin shortcut: add a member directly.
-
-        For **public** groups only. Private groups always require the
-        invite → accept flow via :meth:`invite`.
-        """
-        raise NotImplementedError(_PLANNED_V010)
+        """Admin shortcut for public groups. v0.10.1."""
+        raise NotImplementedError(_PLANNED_V010_1)
 
     def remove_member(self, group_id: str, bot_id: str) -> Any:
-        """Remove a member. Admin-only.
-
-        The removed member receives a ``group.removed`` system message.
-        They can be re-invited later, but re-joining starts a fresh
-        history line (they don't see messages sent while they were out).
-        """
-        raise NotImplementedError(_PLANNED_V010)
+        """Remove a member. v0.10.1."""
+        raise NotImplementedError(_PLANNED_V010_1)
 
     def promote(self, group_id: str, bot_id: str) -> Any:
-        """Promote a member to admin. Admin-only."""
-        raise NotImplementedError(_PLANNED_V010)
+        """Promote member to admin. v0.10.1."""
+        raise NotImplementedError(_PLANNED_V010_1)
 
     def demote(self, group_id: str, bot_id: str) -> Any:
-        """Demote an admin to member. Admin-only.
-
-        Note: the creator cannot be demoted (permanent admin).
-        """
-        raise NotImplementedError(_PLANNED_V010)
+        """Demote admin to member. v0.10.1."""
+        raise NotImplementedError(_PLANNED_V010_1)
 
     # ── Leave / delete ──────────────────────────────────────────────
 
-    def leave(self, group_id: str) -> Any:
-        """Leave a group.
+    def leave(self, group_id: str) -> dict:
+        """Leave a group. Creator cannot leave (must delete)."""
+        resp = self._client._http.request(
+            "POST", f"/a2a/v1/groups/{group_id}/leave",
+        )
+        return resp if isinstance(resp, dict) else {}
 
-        Other members receive a ``group.member_left`` system message.
-        You can be re-invited later; re-joining starts a fresh history
-        line.
-        """
-        raise NotImplementedError(_PLANNED_V010)
+    def delete(self, group_id: str) -> dict:
+        """Delete a group. Creator-only."""
+        resp = self._client._http.request(
+            "DELETE", f"/a2a/v1/groups/{group_id}",
+        )
+        return resp if isinstance(resp, dict) else {}
 
-    def delete(self, group_id: str) -> Any:
-        """Delete a group entirely. Creator-only.
-
-        All members receive a ``group.deleted`` system message. Message
-        history is retained for audit but no longer accessible via the
-        SDK.
-        """
-        raise NotImplementedError(_PLANNED_V010)
-
-    # ── Group memory ────────────────────────────────────────────────
+    # ── Group memory (v0.10.1) ──────────────────────────────────────
 
     def get_memory(self, group_id: str) -> dict:
-        """Fetch the shared group memory blob.
-
-        Group memory is a JSON dict, mutated by members via
-        :meth:`update_memory` and merged server-side (last-write-wins
-        per key). Analog of ``Friend.memory`` but scoped to the whole
-        group.
-        """
-        raise NotImplementedError(_PLANNED_V010)
+        """Fetch shared group memory. v0.10.1."""
+        raise NotImplementedError(_PLANNED_V010_1)
 
     def update_memory(self, group_id: str, memory: dict) -> Any:
-        """Merge ``memory`` into the shared group memory.
+        """Merge into shared group memory. v0.10.1."""
+        raise NotImplementedError(_PLANNED_V010_1)
 
-        Merges are last-write-wins per key. Pass ``None`` for a key to
-        delete it.
-
-        The ``WakeMode`` daemon calls this automatically from the second
-        return value of a group-message handler — you rarely need to
-        call it by hand.
-        """
-        raise NotImplementedError(_PLANNED_V010)
-
-    # ── Per-user mute (no leave) ────────────────────────────────────
+    # ── Per-user mute (v0.10.1) ─────────────────────────────────────
 
     def mute(self, group_id: str) -> Any:
-        """Mute the group without leaving.
-
-        You stop receiving inbox tasks + SSE events for this group but
-        remain a member. Useful for high-volume groups where you want to
-        opt out of realtime notifications.
-        """
-        raise NotImplementedError(_PLANNED_V010)
+        """Mute the group without leaving. v0.10.1."""
+        raise NotImplementedError(_PLANNED_V010_1)
 
     def unmute(self, group_id: str) -> Any:
-        """Unmute a previously muted group."""
-        raise NotImplementedError(_PLANNED_V010)
+        """Unmute. v0.10.1."""
+        raise NotImplementedError(_PLANNED_V010_1)

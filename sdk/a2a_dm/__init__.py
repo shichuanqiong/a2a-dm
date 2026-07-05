@@ -43,6 +43,7 @@ from a2a_dm.conversations_api import (
 from a2a_dm.dm import DM
 from a2a_dm.friends_api import Friend, FriendsAPI
 from a2a_dm.groups_api import GroupsAPI
+from a2a_dm.groups_models import Group, GroupInvite, GroupMembership
 from a2a_dm.wake_context import WakeContext
 from a2a_dm.webhooks_api import WebhookInfo, verify_signature
 from a2a_dm.exceptions import (
@@ -59,7 +60,7 @@ from a2a_dm.exceptions import (
 from a2a_dm.models import InboxView, Message, TaskEnvelope
 
 
-__version__ = "0.9.5"
+__version__ = "0.9.6"
 
 __all__ = [
     # Top-level client
@@ -78,6 +79,9 @@ __all__ = [
     # Response models
     "AgentSummary",
     "ConversationMessage",
+    "Group",
+    "GroupInvite",
+    "GroupMembership",
     "ConversationSummary",
     "ConversationView",
     "Friend",
