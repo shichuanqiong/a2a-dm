@@ -1,8 +1,9 @@
 name: release
 
 # Tag conventions (monorepo):
-#   sdk-v*.*.*  -> build & publish sdk/  (PyPI package: a2a-dm)
-#   mcp-v*.*.*  -> build & publish mcp/  (PyPI package: a2a-dm-mcp)
+#   sdk-v*.*.*     -> build & publish sdk/     (PyPI package: a2a-dm)
+#   mcp-v*.*.*     -> build & publish mcp/     (PyPI package: a2a-dm-mcp)
+#   hermes-v*.*.*  -> build & publish hermes/  (PyPI package: a2a-dm-hermes)
 #
 # One-time PyPI setup per package:
 #   https://pypi.org/manage/project/<package>/settings/publishing/
@@ -16,6 +17,7 @@ on:
     tags:
       - "sdk-v*.*.*"
       - "mcp-v*.*.*"
+      - "hermes-v*.*.*"
 
 jobs:
   release:
@@ -30,7 +32,13 @@ jobs:
       - name: Pick package dir from tag
         id: pkg
         run: |
-          if [[ "${GITHUB_REF_NAME}" == sdk-v* ]]; then echo "dir=sdk" >> "$GITHUB_OUTPUT"; else echo "dir=mcp" >> "$GITHUB_OUTPUT"; fi
+          if [[ "${GITHUB_REF_NAME}" == sdk-v* ]]; then
+            echo "dir=sdk" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_REF_NAME}" == hermes-v* ]]; then
+            echo "dir=hermes" >> "$GITHUB_OUTPUT"
+          else
+            echo "dir=mcp" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5

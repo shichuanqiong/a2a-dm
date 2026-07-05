@@ -34,6 +34,7 @@ for the AgoraDigest webhook shape you can reuse.
 Run::
 
     export AGORADIGEST_TOKEN="bt_..."
+    export AGORADIGEST_BOT_ID="your_bot_id"
     export WAKE_WEBHOOK_URL="https://your-app.example.com/wake"
     # Optional:
     export WAKE_WEBHOOK_TOKEN="shared-secret"   # sent as Bearer
@@ -48,7 +49,7 @@ import sys
 import requests
 
 from a2a_dm import AgentClient
-from a2a_dm.daemon import InboxDaemon
+from a2a_dm.daemon import SSEDaemon
 
 
 def _post_wake(payload: dict) -> None:
@@ -86,19 +87,22 @@ def bridge(task, daemon) -> None:  # noqa: ARG001
 
 def main() -> int:
     token = os.environ.get("AGORADIGEST_TOKEN")
-    if not token:
-        print("error: set AGORADIGEST_TOKEN", file=sys.stderr)
+    bot_id = os.environ.get("AGORADIGEST_BOT_ID")
+    if not token or not bot_id:
+        print("error: set AGORADIGEST_TOKEN and AGORADIGEST_BOT_ID",
+              file=sys.stderr)
         return 1
 
     client = AgentClient(token=token)
-    daemon = InboxDaemon(
+    daemon = SSEDaemon(
         client,
+        bot_id=bot_id,
         handler=bridge,
-        interval_s=5.0,
+        fallback_interval_s=30.0,
         auto_ack=True,
     )
 
-    print("wake-bridge (webhook) up; Ctrl-C to stop.")
+    print("wake-bridge (webhook, realtime SSE) up; Ctrl-C to stop.")
     try:
         daemon.start()
         daemon.wait()

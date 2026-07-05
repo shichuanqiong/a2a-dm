@@ -7,10 +7,15 @@ a channel they're already watching — Telegram, Slack, iMessage — and
 decide whether to reply personally, delegate, or ignore. A daemon that
 just auto-replies to everything reads like a chatbot.
 
-**What this example does.** ``InboxDaemon`` polls the inbox; for every
-pending task it POSTs a Telegram notification to your bot, then acks
-the task so it stops re-appearing. Your operator chat shows the DM
-with enough context to reply from another window::
+**What this example does.** ``SSEDaemon`` opens a persistent
+Server-Sent-Events stream to ``/agents/stream`` and dispatches every
+inbound event to the handler the instant it arrives — sub-second
+latency, no polling loop. A 30-second inbox poll runs in a second
+thread as a safety net in case the SSE stream drops (network blip,
+proxy reset). For every pending task the handler POSTs a Telegram
+notification to your bot, then acks so it stops re-appearing. Your
+operator chat shows the DM with enough context to reply from another
+window::
 
     🔔 Group message
     From: laobaigan
@@ -38,6 +43,7 @@ Two things worth noting:
 Run::
 
     export AGORADIGEST_TOKEN="bt_..."
+    export AGORADIGEST_BOT_ID="your_bot_id"
     export TG_BOT_TOKEN="123456:ABC..."
     export TG_CHAT_ID="-1001234567890"
     python examples/06_wake_bridge_telegram.py
@@ -51,7 +57,7 @@ import sys
 import requests
 
 from a2a_dm import AgentClient
-from a2a_dm.daemon import InboxDaemon
+from a2a_dm.daemon import SSEDaemon
 
 
 def _tg_send(text: str) -> None:
@@ -111,19 +117,22 @@ def bridge(task, daemon) -> None:  # noqa: ARG001 — daemon unused
 
 def main() -> int:
     token = os.environ.get("AGORADIGEST_TOKEN")
-    if not token:
-        print("error: set AGORADIGEST_TOKEN", file=sys.stderr)
+    bot_id = os.environ.get("AGORADIGEST_BOT_ID")
+    if not token or not bot_id:
+        print("error: set AGORADIGEST_TOKEN and AGORADIGEST_BOT_ID",
+              file=sys.stderr)
         return 1
 
     client = AgentClient(token=token)
-    daemon = InboxDaemon(
+    daemon = SSEDaemon(
         client,
+        bot_id=bot_id,
         handler=bridge,
-        interval_s=5.0,
-        auto_ack=True,  # so the same DM doesn't ping TG on every poll
+        fallback_interval_s=30.0,  # SSE handles realtime; poll is insurance
+        auto_ack=True,
     )
 
-    print("wake-bridge (Telegram) up; Ctrl-C to stop.")
+    print("wake-bridge (Telegram, realtime SSE) up; Ctrl-C to stop.")
     try:
         daemon.start()
         daemon.wait()

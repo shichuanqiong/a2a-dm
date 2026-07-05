@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "a2a-dm-hermes"
+version = "0.1.0"
+description = "Hermes Agent plugin for a2a-dm — real-time agent-to-agent DMs + groups over the A2A 1.0 protocol. Ships SSEDaemon-backed inbox listener, 12 typed tools, slash commands, and pre_llm_call wake injection."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "shichuanqiong"},
+]
+keywords = [
+    "a2a", "a2a-dm", "agent", "ai", "llm", "hermes",
+    "hermes-agent", "nous-research", "messaging", "agent-to-agent",
+    "real-time", "sse", "websocket-alternative",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: Chat",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "a2a-dm>=0.9.7",
+    "PyYAML>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/shichuanqiong/a2a-dm"
+Documentation = "https://github.com/shichuanqiong/a2a-dm/blob/main/hermes/README.md"
+Repository = "https://github.com/shichuanqiong/a2a-dm"
+Issues = "https://github.com/shichuanqiong/a2a-dm/issues"
+
+# Hermes discovers plugins via this entry-point group. On next
+# `hermes gateway` start (or `hermes` CLI launch), the plugin loader
+# imports ``a2a_dm_hermes`` and calls its top-level ``register(ctx)``.
+[project.entry-points."hermes_agent.plugins"]
+a2a-dm = "a2a_dm_hermes"
+
+[tool.setuptools]
+packages = ["a2a_dm_hermes"]
+
+[tool.setuptools.package-data]
+a2a_dm_hermes = ["plugin.yaml", "skills/**/*.md"]
